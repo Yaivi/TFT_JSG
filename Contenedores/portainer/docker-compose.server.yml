@@ -1,0 +1,20 @@
+# ============================================================
+#  Portainer Server  -  Servidor central de monitorizacion
+#  Se despliega en el servidor de gestion del laboratorio.
+# ============================================================
+services:
+  portainer:
+    image: portainer/portainer-ce:lts   # version LTS: estable y reproducible (mejor que :latest para un TFG)
+    container_name: portainer
+    restart: always
+    ports:
+      - "9443:9443"   # Consola web (HTTPS)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock   # acceso al Docker del propio servidor
+      - portainer_data:/data                         # persiste la configuracion de Portainer
+
+volumes:
+  portainer_data:
+    name: portainer_data
+
+#  Uso:  docker compose -f docker-compose.server.yml up -d

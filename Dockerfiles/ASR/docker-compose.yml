@@ -1,0 +1,61 @@
+# =============================================================================
+# Administración de Servicios en Red  ·  Topología (multi-alumno)
+# -----------------------------------------------------------------------------
+#     red-externa (10.${OCTETO}.1.0/24)     red-interna (10.${OCTETO}.2.0/24, aislada)
+#         (Internet) ──── pasarela ────────────┬──── servidor (DNS/correo/SSH)
+#                                               └──── cliente
+#
+# - SIN container_name: Compose nombra <proyecto>-<servicio>-N (alumno01-asr-servidor-1),
+#   imprescindible para que el sudoers y los scripts lo reconozcan y no choquen alumnos.
+# - OCTETO unico por proyecto (lo pasa comun.sh) -> subredes sin "Pool overlaps".
+# - hostname fija el prompt; el DNS interno sigue funcionando por nombre de servicio.
+# - red-interna sigue 'internal: true' (aislada, sin salida directa a Internet).
+# =============================================================================
+services:
+
+  pasarela:
+    build: ./pasarela
+    hostname: asr-pasarela
+    cap_add: ["NET_ADMIN", "NET_RAW"]
+    sysctls:
+      - net.ipv4.ip_forward=1
+    stdin_open: true
+    tty: true
+    networks:
+      red-externa:
+        ipv4_address: 10.${OCTETO:-1}.1.254
+      red-interna:
+        ipv4_address: 10.${OCTETO:-1}.2.254
+
+  servidor:
+    build: ./servidor
+    hostname: asr-servidor
+    cap_add: ["NET_ADMIN"]
+    stdin_open: true
+    tty: true
+    networks:
+      red-interna:
+        ipv4_address: 10.${OCTETO:-1}.2.10
+
+  cliente:
+    build: ./cliente
+    hostname: asr-cliente
+    cap_add: ["NET_ADMIN"]
+    stdin_open: true
+    tty: true
+    networks:
+      red-interna:
+        ipv4_address: 10.${OCTETO:-1}.2.20
+
+networks:
+  red-externa:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.${OCTETO:-1}.1.0/24
+  red-interna:
+    driver: bridge
+    internal: true          # red aislada (no sale directamente a Internet)
+    ipam:
+      config:
+        - subnet: 10.${OCTETO:-1}.2.0/24

@@ -1,0 +1,18 @@
+# ============================================================
+#  Portainer Agent  -  Va en CADA puesto del estudiante.
+# ============================================================
+services:
+  portainer_agent:
+    image: portainer/agent:lts
+    container_name: portainer_agent
+    restart: always
+    ports:
+      - "9001:9001"   # puerto por el que el servidor central consulta a este puesto
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
+
+
+  #  Uso:  docker compose -f docker-compose.agent.yml up -d
+
+    # docker run -d --name portainer_agent --restart=always -p 9001:9001 -v /var/run/docker.sock:/var/run/docker.sock portainer/agent:lts

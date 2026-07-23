@@ -1,0 +1,41 @@
+server:
+  addr: ":5001"
+  certificate: "/config/domain.crt"
+  key: "/config/domain.key"
+token:
+  issuer: "Registro Laboratorio"
+  expiration: 900
+  certificate: "/config/auth.crt"
+  key: "/config/auth.key"
+  disable_legacy_key_id: true
+users:
+  "profesor":
+    password: "$2y$05$MAoT.JoBxu89zz0P5EDUiulayxsyQQ4oigml53g1ud/5lhMOT6FLG"
+    labels:
+      group: ["profesor"]
+  "alumno":
+    password: "$2y$05$8xs3yq0BZaHfOteMSbC2uOPBp73DkJmzpV3rmIgH/0cb7vaztpatu"
+    labels:
+      group: ["alumno"]
+  alumno01:
+    password: $2y$05$7IDgQLzi11r/d8bhGpF4SeI5Zeh2YKFXzwm7448PuEbt76ehfLn7q
+    labels:
+      group:
+        - alumno
+  prof_ana:
+    password: $2y$05$EULgiJNpl4IYrdaGMET6ZuoTy1uOrVy2MlRcp35PxZWB5skX57sC6
+    labels:
+      group:
+        - profesor
+  alumno02:
+    password: $2y$05$P6s.qjTU4fCnPnsQ81wXieryOqA084/ObLHrq5AJN7LXVLhrpgtiS
+    labels:
+      group:
+        - alumno
+acl:
+  - match: {labels: {group: "profesor"}}
+    actions: ["*"]
+    comment: "Profesores: acceso total (push + pull)"
+  - match: {labels: {group: "alumno"}}
+    actions: ["pull"]
+    comment: "Alumnos: solo lectura"

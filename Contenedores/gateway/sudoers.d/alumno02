@@ -1,0 +1,13 @@
+# Generado automaticamente. No editar a mano.
+alumno02 ALL=(root) NOPASSWD: /usr/bin/docker compose -p alumno02-* start
+alumno02 ALL=(root) NOPASSWD: /usr/bin/docker compose -p alumno02-* stop
+alumno02 ALL=(root) NOPASSWD: /usr/bin/docker ps -a --filter name=^alumno02-
+alumno02 ALL=(root) NOPASSWD: /usr/bin/docker start alumno02-rc-servidor-1
+alumno02 ALL=(root) NOPASSWD: /usr/bin/docker stop alumno02-rc-servidor-1
+alumno02 ALL=(root) NOPASSWD: /usr/bin/docker exec -it alumno02-rc-servidor-1 bash
+alumno02 ALL=(root) NOPASSWD: /usr/bin/docker start alumno02-rc-cliente-1
+alumno02 ALL=(root) NOPASSWD: /usr/bin/docker stop alumno02-rc-cliente-1
+alumno02 ALL=(root) NOPASSWD: /usr/bin/docker exec -it alumno02-rc-cliente-1 bash
+alumno02 ALL=(root) NOPASSWD: /usr/bin/docker start alumno02-rc-router-1
+alumno02 ALL=(root) NOPASSWD: /usr/bin/docker stop alumno02-rc-router-1
+alumno02 ALL=(root) NOPASSWD: /usr/bin/docker exec -it alumno02-rc-router-1 bash

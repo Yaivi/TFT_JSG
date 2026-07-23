@@ -1,0 +1,76 @@
+# =============================================================================
+# VPN de acceso al laboratorio  ·  Opcion B
+# -----------------------------------------------------------------------------
+# wg-easy (servidor WireGuard) y lab-gateway viven en la MISMA red Docker.
+# El alumno se conecta por la VPN y alcanza el gateway de contenedor a
+# contenedor, sin pasar por la publicacion de puertos del host Windows.
+#
+#   Alumno (WireGuard 10.8.0.x) ── tunel ──> wg-easy (172.28.0.2)
+#                                                 │  (misma red Docker)
+#                                                 └──> lab-gateway (172.28.0.3:22)
+#
+# Lo unico publicado al host es el UDP 51820 (transporte del tunel) y el
+# 51821 (panel web de administracion).
+# =============================================================================
+services:
+
+  wg-easy:
+    image: ghcr.io/wg-easy/wg-easy:14
+    container_name: wg-easy
+    environment:
+      # ----------------------------------------------------------------------
+      # CAMBIA ESTO:
+      # IP/host por la que el alumno alcanza el servidor (es su "Endpoint").
+      #   - Prueba en la MISMA red (LAN):  192.168.0.32
+      #   - Prueba desde OTRA red:         tu IP publica  (y reenvia UDP 51820
+      #                                    en el router hacia este host)
+      - WG_HOST=192.168.0.32
+      # Hash de la contrasena del panel web. Generalo con:
+      #   docker run --rm ghcr.io/wg-easy/wg-easy:14 wgpw 'TuClaveDelPanel'
+      # y PEGA el hash aqui DUPLICANDO cada $ -> $$  (si no, Compose lo rompe)
+      - PASSWORD_HASH=$$2a$$12$$uQ9p.BqQdbcODchsfhTabeiqD5mF0mqbK1ZgaOUBvGsR8IqkpPCGS
+      # ----------------------------------------------------------------------
+      - WG_PORT=51820
+      - WG_DEFAULT_ADDRESS=10.8.0.x          # subred que recibe cada cliente VPN
+      - WG_ALLOWED_IPS=172.28.0.0/24         # el alumno enruta SOLO la red del lab
+      - WG_DEFAULT_DNS=1.1.1.1
+    volumes:
+      - etc_wireguard:/etc/wireguard
+    ports:
+      - "51820:51820/udp"                    # tunel WireGuard
+      - "51821:51821/tcp"                    # panel web de administracion
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+    networks:
+      lab-net:
+        ipv4_address: 172.28.0.2
+    restart: unless-stopped
+
+  gateway:
+    build: ./gateway                         # usa tu Contenedores/gateway/Dockerfile
+    container_name: lab-gateway              # debe llamarse asi: tus scripts hacen
+                                             # docker exec lab-gateway ...
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # El 2222 ya NO hace falta para la VPN. Lo dejo solo por si quieres entrar
+    # tambien desde el propio host (ssh alumno01@127.0.0.1 -p 2222). Puedes quitarlo.
+    ports:
+      - "2222:22"
+    networks:
+      lab-net:
+        ipv4_address: 172.28.0.3
+    restart: unless-stopped
+
+networks:
+  lab-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+
+volumes:
+  etc_wireguard:

@@ -1,0 +1,33 @@
+services:
+  auth:
+    image: cesanta/docker_auth:1.14.0
+    container_name: docker_auth
+    restart: always
+    command: ["-logtostderr", "/config/auth_config.yml"]
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./auth:/config
+
+  registry:
+    image: registry:3
+    container_name: registro
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      REGISTRY_AUTH: token
+      REGISTRY_AUTH_TOKEN_REALM: "https://192.168.0.22:5001/auth"
+      REGISTRY_AUTH_TOKEN_SERVICE: "Registro Laboratorio"
+      REGISTRY_AUTH_TOKEN_ISSUER: "Registro Laboratorio"
+      REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /auth/auth.crt
+      REGISTRY_HTTP_TLS_CERTIFICATE: /auth/domain.crt
+      REGISTRY_HTTP_TLS_KEY: /auth/domain.key
+    volumes:
+      - registro-datos:/data
+      - ./auth:/auth
+    depends_on:
+      - auth
+
+volumes:
+  registro-datos:

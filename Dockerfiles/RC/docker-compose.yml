@@ -1,0 +1,61 @@
+# =============================================================================
+# Redes de Computadores  ·  Topología de laboratorio (multi-alumno)
+# -----------------------------------------------------------------------------
+#     red-lan (10.${OCTETO}.1.0/24)        red-wan (10.${OCTETO}.2.0/24)
+#   cliente ───────────────── router ───────────────── servidor
+#
+# - SIN container_name: Compose nombra <proyecto>-<servicio>-N (alumno01-rc-router-1).
+# - OCTETO unico por proyecto (lo pasa comun.sh) -> subredes sin "Pool overlaps".
+# - hostname fija el prompt sin romper el namespacing ni el DNS por servicio.
+# =============================================================================
+services:
+  cliente:
+    image: rc-node
+    build: .
+    hostname: redes-cliente
+    cap_add: ["NET_ADMIN","NET_RAW"]
+    command: sh -c "ip route replace 10.${OCTETO:-1}.2.0/24 via 10.${OCTETO:-1}.1.254 && sleep infinity"
+    stdin_open: true
+    tty: true
+    networks:
+      red-lan:
+        ipv4_address: 10.${OCTETO:-1}.1.10
+
+  router:
+    image: rc-node
+    build: .
+    hostname: redes-router
+    cap_add: ["NET_ADMIN","NET_RAW"]
+    sysctls:
+      - net.ipv4.ip_forward=1
+    stdin_open: true
+    tty: true
+    networks:
+      red-lan:
+        ipv4_address: 10.${OCTETO:-1}.1.254
+      red-wan:
+        ipv4_address: 10.${OCTETO:-1}.2.254
+
+  servidor:
+    image: rc-node
+    build: .
+    hostname: redes-servidor
+    cap_add: ["NET_ADMIN","NET_RAW"]
+    command: sh -c "ip route replace 10.${OCTETO:-1}.1.0/24 via 10.${OCTETO:-1}.2.254 && sleep infinity"
+    stdin_open: true
+    tty: true
+    networks:
+      red-wan:
+        ipv4_address: 10.${OCTETO:-1}.2.10
+
+networks:
+  red-lan:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.${OCTETO:-1}.1.0/24
+  red-wan:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.${OCTETO:-1}.2.0/24
