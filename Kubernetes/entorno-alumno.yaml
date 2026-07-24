@@ -24,7 +24,7 @@ spec:
     spec:
       containers:
         - name: practicas
-          image: laboratorio-registry:6001/asr-servidor:latest
+          image: laboratorio-registry:6001/fso:latest
           ports:
             - containerPort: 22
           volumeMounts:

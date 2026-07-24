@@ -1145,6 +1145,8 @@ ping -c 3 10.2.2.254            # debe funcionar (es su gateway directo)
 
 
  ## Kubernetes
+Requiere dos máquinas Linux (físicas o virtuales) en la misma red y que se vean por IP. Una actúa como nodo servidor, con el plano de control, y la otra como agente. El servidor necesita IP fija o reserva DHCP, porque el agente la usa para registrarse.
+
 ```bash
 sudo k3s kubectl create deployment prueba --image=nginx
 sudo k3s kubectl scale deployment prueba --replicas=4
