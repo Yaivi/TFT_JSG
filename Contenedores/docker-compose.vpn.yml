@@ -24,7 +24,7 @@ services:
       #   - Prueba en la MISMA red (LAN):  192.168.0.32
       #   - Prueba desde OTRA red:         tu IP publica  (y reenvia UDP 51820
       #                                    en el router hacia este host)
-      - WG_HOST=192.168.0.32
+      - WG_HOST=192.168.0.22
       # Hash de la contrasena del panel web. Generalo con:
       #   docker run --rm ghcr.io/wg-easy/wg-easy:14 wgpw 'TuClaveDelPanel'
       # y PEGA el hash aqui DUPLICANDO cada $ -> $$  (si no, Compose lo rompe)

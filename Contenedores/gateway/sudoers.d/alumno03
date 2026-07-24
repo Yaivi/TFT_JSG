@@ -1,0 +1,4 @@
+# Generado automaticamente. No editar a mano.
+alumno03 ALL=(root) NOPASSWD: /usr/bin/docker compose -p alumno03-* start
+alumno03 ALL=(root) NOPASSWD: /usr/bin/docker compose -p alumno03-* stop
+alumno03 ALL=(root) NOPASSWD: /usr/bin/docker ps -a --filter name=^alumno03-

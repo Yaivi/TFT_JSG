@@ -2,6 +2,8 @@
 
 
 ## Arranque rápido
+Aquí se deja una serie de comandos para comprobar que los contenedores creados a partir de las imágenes de los Dockerfiles funcionan todos correctamente
+
 **Asignaturas de un solo contenedor (BD1, BD2, FSO):**
 
 ```bash
@@ -33,12 +35,12 @@ docker exec -it fso bash
 
 **Asignaturas multicontenedor (Redes, ASR):**
 ```bash
-ssh alumno01@192.168.0.22 -p 2222
-
-sudo docker ps -a --filter name=^alumno01-       
-sudo docker compose -p alumno01-rc start         
-sudo docker exec -it alumno01-rc-router-1 bash   
-    
+cd RC
+docker compose up -d --build
+docker exec -it rc-cliente bash
+docker exec -it rc-servidor bash
+docker exec -it rc-router bash
+docker compose down  
 
 
 
@@ -50,8 +52,485 @@ docker exec -it asr-pasarela bash
 docker compose down  
 ```
 
+## Puesta en marcha del laboratorio
 
-# Validaciones 
+Esta parte va dirigida a quien **monta** el laboratorio (profesorado o administración).
+
+### Convenciones
+
+- `<IP_SERVIDOR>` es la IP del equipo que aloja el registro y la pasarela. Sustitúyela
+  en todos los comandos por la propia. Comprueba cuál es con `ipconfig` (Windows) o
+  `hostname -I` (Linux), y usa la del adaptador **físico**, no la de los adaptadores
+  virtuales de Hyper-V, vEthernet o WSL.
+- Los ejemplos están en PowerShell porque el desarrollo se hizo sobre Docker Desktop en
+  Windows. En Linux funcionan igual cambiando `\` por `/` y `${PWD}\auth` por `$PWD/auth`.
+- Requisitos comunes: Docker Engine o Docker Desktop arrancado, y los dos equipos
+  (servidor y cliente) en la misma red.
+
+| Componente | Puerto | Para qué |
+|---|---|---|
+| Registro de imágenes | 5000/tcp | `docker login`, `push`, `pull` |
+| Servidor de tokens | 5001/tcp | Emisión de tokens de autorización |
+| Pasarela SSH | 2222/tcp | Acceso de los alumnos al modelo centralizado |
+| Portainer | 9443/tcp | Consola de monitorización |
+| Agente Portainer | 9001/tcp | Solo en máquinas monitorizadas |
+| WireGuard | 51820/udp | Túnel de acceso remoto |
+
+Abre esos puertos en el cortafuegos del servidor. El único que debe salir a Internet
+(reenvío en el router) es el 51820/udp.
+
+---
+
+### 1. Registro privado de imágenes
+
+Dos contenedores que se reparten el trabajo: `registro` almacena y sirve las imágenes,
+y `docker_auth` valida credenciales, aplica los permisos y emite un token firmado. El
+registro no maneja contraseñas: solo comprueba la firma del token.
+
+El flujo de cualquier `login`, `push` o `pull` es:
+
+1. El cliente pide acceso al registro (5000).
+2. El registro contesta "necesitas un token, pídelo en el 5001".
+3. El cliente se autentica contra `docker_auth`, que mira la ACL y firma un token con
+   los permisos de ese usuario.
+4. El cliente presenta el token; el registro verifica la firma y concede el acceso.
+
+Todo el tráfico va por HTTPS con certificados de una CA propia.
+
+#### 1.1 Certificados
+
+Hacen falta tres parejas dentro de `auth/`:
+
+| Ficheros | Función |
+|---|---|
+| `ca.crt` / `ca.key` | CA propia. Raíz de confianza: firma el certificado de servidor y es la que importan los clientes. |
+| `domain.crt` / `domain.key` | Certificado TLS de servidor, con la IP en el campo SAN. Lo usan los **dos** contenedores. |
+| `auth.crt` / `auth.key` | Pareja exclusiva para firmar tokens. `docker_auth` firma con la clave, el registro verifica con el certificado. |
+
+Se parte de una carpeta de trabajo con una subcarpeta `auth`:
+
+```powershell
+mkdir registro; cd registro; mkdir auth
+```
+
+Primero la CA propia, que será la raíz de confianza de todo el conjunto:
+
+```powershell
+docker run --rm -v ${PWD}\auth:/work -w /work alpine/openssl `
+  req -x509 -newkey rsa:4096 -nodes -days 3650 `
+  -keyout ca.key -out ca.crt -subj "/CN=Laboratorio Docker CA"
+```
+
+Después la clave y la petición del certificado de servidor:
+
+```powershell
+docker run --rm -v ${PWD}\auth:/work -w /work alpine/openssl `
+  req -newkey rsa:4096 -nodes -keyout domain.key -out domain.csr `
+  -subj "/CN=<IP_SERVIDOR>"
+```
+
+El certificado se firma con la CA incluyendo la IP en el campo SAN. Ese campo es
+obligatorio, sin él los clientes actuales rechazan el certificado aunque el nombre común
+coincida.
+
+```powershell
+"subjectAltName=IP:<IP_SERVIDOR>" | Set-Content -Encoding ASCII auth\san.ext
+
+docker run --rm -v ${PWD}\auth:/work -w /work alpine/openssl `
+  x509 -req -in domain.csr -CA ca.crt -CAkey ca.key -CAcreateserial `
+  -days 825 -extfile san.ext -out domain.crt
+```
+
+Por último la pareja de firma de tokens, que va autofirmada y no necesita pasar por la CA:
+
+```powershell
+docker run --rm -v ${PWD}\auth:/work -w /work alpine/openssl `
+  req -x509 -newkey rsa:4096 -nodes -days 3650 `
+  -keyout auth.key -out auth.crt -subj "/CN=token-signing"
+```
+
+Conviene comprobar que `auth.crt` y `auth.key` son pareja. Los dos comandos deben
+imprimir el **mismo** `Modulus`; si no coinciden, la verificación de la firma fallará
+siempre:
+
+```powershell
+docker run --rm -v ${PWD}\auth:/work -w /work alpine/openssl rsa  -noout -modulus -in auth.key
+docker run --rm -v ${PWD}\auth:/work -w /work alpine/openssl x509 -noout -modulus -in auth.crt
+```
+
+####  1.2 Usuarios y permisos
+
+Los usuarios y las reglas de acceso viven en `auth/auth_config.yml`. Las contraseñas se
+guardan como hash bcrypt, nunca en claro:
+
+```powershell
+docker run --rm --entrypoint htpasswd httpd:2 -nbB profesor prueba1234
+docker run --rm --entrypoint htpasswd httpd:2 -nbB alumno   alumno1234
+```
+
+De la salida se copia **solo la parte posterior a los dos puntos**, que empieza por `$2y$`.
+
+```yaml
+server:
+  addr: ":5001"
+  certificate: "/config/domain.crt"
+  key: "/config/domain.key"
+
+token:
+  issuer: "Registro Laboratorio"
+  expiration: 900
+  certificate: "/config/auth.crt"
+  key: "/config/auth.key"
+  disable_legacy_key_id: true
+
+users:
+  "profesor":
+    password: "$2y$05$..."
+  "alumno":
+    password: "$2y$05$..."
+
+acl:
+  - match: {account: "profesor"}
+    actions: ["*"]
+    comment: "Profesor: acceso total"
+  - match: {account: "alumno"}
+    actions: ["pull"]
+    comment: "Alumno: solo lectura"
+```
+
+El `issuer` debe coincidir exactamente con el que se configura en el registro, y
+`expiration` fija la validez del token en segundos. La opción `disable_legacy_key_id` es
+imprescindible con `registry:3`.
+
+#### 1.3 Arranque
+
+```yaml
+services:
+  auth:
+    image: cesanta/docker_auth:1.14.0
+    container_name: docker_auth
+    restart: always
+    command: ["-logtostderr", "/config/auth_config.yml"]
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./auth:/config
+
+  registry:
+    image: registry:3
+    container_name: registro
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      REGISTRY_AUTH: token
+      REGISTRY_AUTH_TOKEN_REALM: "https://<IP_SERVIDOR>:5001/auth"
+      REGISTRY_AUTH_TOKEN_SERVICE: "Registro Laboratorio"
+      REGISTRY_AUTH_TOKEN_ISSUER: "Registro Laboratorio"
+      REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /auth/auth.crt
+      REGISTRY_HTTP_TLS_CERTIFICATE: /auth/domain.crt
+      REGISTRY_HTTP_TLS_KEY: /auth/domain.key
+      REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /data
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    volumes:
+      - registro-datos:/data
+      - ./auth:/auth
+    depends_on:
+      - auth
+
+volumes:
+  registro-datos:
+```
+
+`REALM` indica al cliente dónde pedir el token, `SERVICE` e `ISSUER` deben coincidir con
+lo que `docker_auth` escribe dentro de cada token, y `ROOTCERTBUNDLE` es el certificado
+con el que el registro verifica la firma.
+
+`ROOTDIRECTORY` no es opcional: sin ella `registry:3` escribe en `/var/lib/registry` y el
+volumen montado en `/data` queda sin usar, con lo que las imágenes no sobrevivirían a un
+`docker compose down`.
+
+
+```powershell
+docker compose up -d
+docker logs docker_auth --tail 10
+```
+
+El servidor de autenticación debe indicar que ha cargado la configuración con sus dos
+usuarios y que está escuchando en el 5001, sin errores.
+
+#### 1.4 Confiar en la CA desde los clientes
+
+Paso obligatorio en **cada** equipo que vaya a usar el registro. Se copia `ca.crt` al
+cliente y se importa. En Windows, al almacén de raíces de confianza, reiniciando después
+Docker Desktop para que propague la confianza a su máquina interna:
+
+```powershell
+Import-Certificate -FilePath .\ca.crt -CertStoreLocation Cert:\CurrentUser\Root
+```
+
+En Linux la vía más limpia es acotar la confianza a este registro concreto en lugar de
+tocar el almacén del sistema:
+
+```bash
+sudo mkdir -p /etc/docker/certs.d/<IP_SERVIDOR>:5000
+sudo cp ca.crt /etc/docker/certs.d/<IP_SERVIDOR>:5000/ca.crt
+sudo systemctl restart docker
+```
+
+Y en macOS, sobre el llavero del sistema:
+
+```bash
+sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ca.crt
+```
+
+**No** añadas el registro a `insecure-registries`, eso era necesario en la primera
+versión sobre HTTP y ahora provoca un `400 Bad Request` al hablar HTTP contra HTTPS. 
+
+#### 1.5 Validación de roles
+
+Se prepara una imagen cualquiera para tener algo que subir:
+
+```powershell
+docker pull hello-world
+docker tag hello-world <IP_SERVIDOR>:5000/prueba:1
+```
+
+Como profesor, tanto la subida como la descarga deben completarse:
+
+```powershell
+docker logout <IP_SERVIDOR>:5000
+docker login  <IP_SERVIDOR>:5000
+docker push <IP_SERVIDOR>:5000/prueba:1
+docker pull <IP_SERVIDOR>:5000/prueba:1
+```
+
+Como alumno, la descarga funciona igual:
+
+```powershell
+docker logout <IP_SERVIDOR>:5000
+docker login  <IP_SERVIDOR>:5000
+docker pull <IP_SERVIDOR>:5000/prueba:1
+```
+
+Pero la subida debe rechazarse. Se emplea a propósito una imagen que aún no está en el
+registro: reenviar una ya existente podría resolverse sin escribir nada y la prueba no
+demostraría gran cosa.
+
+```powershell
+docker pull alpine
+docker tag alpine <IP_SERVIDOR>:5000/test-alumno:1
+docker push <IP_SERVIDOR>:5000/test-alumno:1
+```
+
+Sin sesión iniciada, cualquier operación debe exigir autenticación:
+
+```powershell
+docker logout <IP_SERVIDOR>:5000
+docker pull <IP_SERVIDOR>:5000/prueba:1
+```
+
+| Acción | Profesor | Alumno | Sin sesión |
+|---|---|---|---|
+| `docker login` | correcto | correcto | — |
+| `docker pull` | permitido | permitido | denegado |
+| `docker push` | permitido | **denegado** | denegado |
+
+Que el `push` del alumno falle con `denied: requested access to the resource is denied`
+es el **resultado correcto** de la prueba.
+
+Para comprobar la persistencia se recrean los contenedores y la imagen debe seguir
+listada. Si desaparece, revisa `ROOTDIRECTORY` en el apartado 1.3:
+
+```powershell
+docker compose down
+docker compose up -d
+```
+
+#### 1.6 Errores frecuentes
+
+| Mensaje | Qué pasa | Solución |
+|---|---|---|
+| `token signed by untrusted key with ID: "ABCD:1234:..."` | `registry:3` identifica las claves por su JWK Thumbprint (RFC 7638); `registry:2` usaba el formato antiguo de *libtrust*, que es el de la cadena con dos puntos. Si `docker_auth` firma con el `kid` antiguo, el registro no lo encuentra entre sus claves aunque el certificado sea el correcto. | `disable_legacy_key_id: true` y `docker_auth` ≥ 1.14.0. En el registro no se toca nada. |
+| `400 Bad Request` sobre `http://...:5000` | El cliente habla HTTP contra un servidor HTTPS | Quitar el registro de `insecure-registries` |
+| `x509: certificate signed by unknown authority` | El cliente no confía en la CA | Importar `ca.crt` (apartado 1.4) y reiniciar Docker |
+| `insufficient scope` | El token es válido pero al usuario le falta permiso | Ajustar la ACL. Es señal de que la firma funciona. |
+| Login correcto pero el catálogo aparece vacío tras recrear | El volumen no se está usando | Añadir `ROOTDIRECTORY` (apartado 1.3) |
+
+#### 1.8 Publicar y versionar imágenes de asignatura
+
+```powershell
+docker login <IP_SERVIDOR>:5000
+docker build -t <IP_SERVIDOR>:5000/asr-servidor:1.0 .
+docker push  <IP_SERVIDOR>:5000/asr-servidor:1.0
+```
+
+Para dejar preparado un estado concreto de una práctica, por ejemplo el servidor de ASR
+con el DNS ya configurado, se consolida el contenedor en una imagen nueva y se publica
+con su propia etiqueta:
+
+```powershell
+docker commit asr-servidor-1 <IP_SERVIDOR>:5000/asr-servidor:practica-dns
+docker push <IP_SERVIDOR>:5000/asr-servidor:practica-dns
+```
+
+Etiqueta siempre con versión. Evita `latest` para el material docente: no permite volver
+atrás si una actualización rompe algo.
+
+---
+
+### 2. Pasarela de acceso y alta de usuarios
+
+La pasarela es el único punto de entrada al modelo centralizado. Monta el socket de
+Docker del anfitrión, así que las órdenes que se ejecutan dentro actúan sobre el Docker
+real. Por eso los alumnos **no** entran en el grupo `docker` ni tienen `sudo` general:
+se les autorizan comandos concretos sobre contenedores concretos mediante reglas
+`sudoers` generadas por usuario.
+
+```powershell
+cd gateway
+docker build -t lab-gateway .
+docker run -d --name lab-gateway -p 2222:22 `
+  -v /var/run/docker.sock:/var/run/docker.sock lab-gateway
+```
+
+El alta de un usuario y el despliegue de su puesto se hacen con los scripts de
+aprovisionamiento. El segundo argumento de `usuario_nuevo.sh` es el rol, y por defecto
+es `alumno`:
+
+```bash
+./usuario_nuevo.sh alumno01
+./usuario_nuevo.sh prof_ana profesor
+./dar_asignatura.sh alumno01 rc
+```
+
+`dar_asignatura.sh` usa `docker compose create` en lugar de `up`, el administrador crea
+el puesto, el alumno lo arranca. Cada despliegue recibe un octeto propio para que las
+subredes de distintos alumnos no colisionen.
+
+#### Validación
+
+Una sesión de trabajo completa desde la cuenta de un alumno debe poder ejecutarse sin
+manipular imágenes, redes ni ficheros de composición:
+
+```bash
+ssh alumno01@<IP_SERVIDOR> -p 2222
+
+sudo docker ps -a --filter name=^alumno01-
+sudo docker compose -p alumno01-rc start
+sudo docker exec -it alumno01-rc-router-1 bash
+exit
+sudo docker compose -p alumno01-rc stop
+```
+
+Y estas otras deben fallar todas, que es lo que demuestra que el modelo de permisos
+sirve de algo: acceso directo al demonio, ver o tocar puestos ajenos, crear contenedores
+nuevos y escapar al anfitrión.
+
+```bash
+docker ps
+sudo docker ps -a
+sudo docker compose -p alumno01-rc up -d
+sudo docker start alumno02-rc-cliente-1
+sudo docker run -v /:/host -it alpine sh
+```
+
+---
+
+### 3. Monitorización con Portainer
+
+El servidor detecta por sí solo el Docker local, así que en el modelo centralizado no
+hace falta ningún agente: ya ve todos los contenedores de los alumnos. El agente solo se
+despliega en las máquinas **adicionales** que se quieran vigilar, es decir, los equipos
+de laboratorio que trabajen en modelo distribuido.
+
+Servidor:
+
+```yaml
+services:
+  portainer:
+    image: portainer/portainer-ce:lts
+    container_name: portainer
+    restart: always
+    ports: ["9443:9443"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+volumes:
+  portainer_data:
+```
+
+Agente, solo en las máquinas remotas:
+
+```yaml
+services:
+  portainer_agent:
+    image: portainer/agent:lts
+    container_name: portainer_agent
+    restart: always
+    ports: ["9001:9001"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
+```
+
+Primer acceso en `https://<IP_SERVIDOR>:9443` para crear la cuenta de administrador.
+Cada máquina con agente se da de alta en *Environments → Add environment → Docker
+Standalone → Agent*, indicando `<IP_PUESTO>:9001`.
+
+Para desplegar el agente en varios equipos a la vez están los scripts de propagación
+(`propagar-linux.sh` y `propagar-windows.ps1`), que recorren un rango de IPs. Requieren
+acceso SSH por clave y, en Windows, el servidor OpenSSH activo en los destinos.
+
+---
+
+### 4. Acceso remoto por VPN
+
+`wg-easy` y la pasarela comparten red de Docker, de modo que el cliente conectado al
+túnel alcanza la pasarela contenedor a contenedor. Al exterior solo se expone el
+51820/udp; el SSH nunca atraviesa un puerto del anfitrión.
+
+La contraseña del panel se guarda como hash, que se genera con la utilidad incluida en
+la propia imagen:
+
+```powershell
+docker run --rm ghcr.io/wg-easy/wg-easy:14 wgpw TuPasswordDelPanel
+```
+
+En el `docker-compose.yml` del módulo hay que rellenar `WG_HOST`, con la IP pública o el
+dominio, y `PASSWORD_HASH`, duplicando cada `$` del hash obtenido. Después:
+
+```powershell
+docker compose up -d --build
+```
+
+El panel queda en `http://localhost:51821`, y desde ahí se crea el perfil del alumno y se
+descarga su fichero `.conf`. El alumno lo importa en la aplicación de WireGuard, activa
+el túnel y ya puede conectar:
+
+```bash
+ssh alumno01@172.28.0.3
+```
+
+En el router hace falta reenviar el **51820/udp** hacia el servidor, en UDP y no en TCP,
+y conviene reservarle la IP por DHCP estático. Comprueba también que la conexión tiene IP
+pública alcanzable y no está detrás de CGNAT.
+
+#### Validación
+
+| Prueba desde una red externa | Resultado esperado |
+|---|---|
+| SSH a `172.28.0.3` con el túnel activo | accesible |
+| SSH a `172.28.0.3` sin túnel | bloqueado |
+| SSH directo a la IP pública, puerto 22 | bloqueado |
+| Panel en la IP pública, puerto 51821 | bloqueado |
+
+---
+
+
+# Validaciones Dockerfiles para prácticas
+Aquí se muestra la serie de comandos que se han usado en los contenedores de cada asignatura 
+para comprobar si es posible realizar las prácticas de estas en los contenedores.
 
 ## BD1 oracle
 ### Arrancar el servicio y conectar

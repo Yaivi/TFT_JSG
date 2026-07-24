@@ -28,7 +28,17 @@ users:
       group:
         - profesor
   alumno02:
-    password: $2y$05$P6s.qjTU4fCnPnsQ81wXieryOqA084/ObLHrq5AJN7LXVLhrpgtiS
+    password: $2y$05$lz8yu8azD2LpG.z0bjcawuoNfZ.MvfauHq0oiU989PWa2XI/XOlSO
+    labels:
+      group:
+        - alumno
+  alumno03:
+    password: $2y$05$T5jWK8PpsasXaM4NCbFLZe8SzBmYB/uoYBpP7Fh8Vukzs3Rosjk8.
+    labels:
+      group:
+        - alumno
+  alumno04:
+    password: $2y$05$qyaLmOCCTuDdBYttC31QDOTCnCsjxMBEoxcCtO3wC4hihVxYhT7Je
     labels:
       group:
         - alumno
